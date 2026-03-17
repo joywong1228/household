@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 type Item = { id: string; name: string; quantity: number; dateAdded: string; collector?: string | null; location: string; spot: string };
 type Data = { [location: string]: { [spot: string]: { [collector: string]: Item[] } } };
@@ -13,20 +13,21 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
-  const [modalData, setModalData] = useState({ name: '', quantity: 1, location: '', spot: '', collector: '', customLocation: '', customSpot: '' });
+  
+  const [modalData, setModalData] = useState({ 
+    name: '', quantity: 1, location: '', spot: '', collector: '', customLocation: '', customSpot: ''
+  });
+
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
   const [expandedCollectors, setExpandedCollectors] = useState<Set<string>>(new Set());
 
-  // Handle ESC key to close modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setShowModal(false);
     };
-    if (showModal) {
-      window.addEventListener('keydown', handleKeyDown);
-    }
+    if (showModal) window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showModal]);
 
@@ -44,26 +45,17 @@ export default function Home() {
         setData(fetchedData);
         const locs = Object.keys(fetchedData);
         if (locs.length > 0) {
-          const firstLoc = locs[0];
+          const firstLoc = currentLocation || locs[0];
           setCurrentLocation(firstLoc);
           const spots = Object.keys(fetchedData[firstLoc] || {});
-          if (spots.length > 0) {
-            setCurrentSpot(spots[0]);
-          }
+          if (spots.length > 0) setCurrentSpot(currentSpot || spots[0]);
         }
       }
-    } catch (error) {
-      console.error('Failed to fetch:', error);
-    }
+    } catch (error) { console.error(error); }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.classList.add('dark');
-  }, []);
+  useEffect(() => { fetchData(); }, []);
+  useEffect(() => { document.documentElement.classList.add('dark'); }, []);
 
   const saveData = async (newData: Data) => {
     await fetch('/api/data', {
@@ -130,13 +122,20 @@ export default function Home() {
     if (item) {
       setEditingItem(item);
       setModalData({ 
-        name: item.name, quantity: item.quantity, location: item.location, spot: item.spot, 
+        name: item.name, quantity: item.quantity, 
+        location: item.location, spot: item.spot, 
         collector: item.collector || '', customLocation: '', customSpot: ''
       });
     } else {
+      const targetLoc = currentLocation || (Object.keys(data)[0] || '');
+      const availableSpots = data[targetLoc] ? Object.keys(data[targetLoc]) : [];
+      const targetSpot = currentSpot !== undefined && availableSpots.includes(currentSpot) 
+        ? currentSpot 
+        : (availableSpots.length > 0 ? availableSpots[0] : 'NEW_SPOT');
+
       setEditingItem(null);
       setModalData({ 
-        name: '', quantity: 1, location: currentLocation, spot: currentSpot, 
+        name: '', quantity: 1, location: targetLoc, spot: targetSpot, 
         collector: '', customLocation: '', customSpot: ''
       });
     }
@@ -148,28 +147,30 @@ export default function Home() {
     const finalLocation = modalData.location === 'NEW_LOC' ? modalData.customLocation : modalData.location;
     const finalSpot = modalData.spot === 'NEW_SPOT' ? modalData.customSpot : modalData.spot;
 
-    if (!finalLocation || !finalSpot) {
-      showToast("Location and Spot cannot be empty");
+    if (!finalLocation?.trim() || !finalSpot?.trim()) {
+      showToast("Location and Spot required");
       return;
     }
 
-    const item: Item = editingItem ? { ...editingItem, ...modalData, location: finalLocation, spot: finalSpot } : {
-      id: Date.now().toString(),
+    if (editingItem) {
+      Object.keys(newData).forEach(l => {
+        Object.keys(newData[l]).forEach(s => {
+          Object.keys(newData[l][s]).forEach(c => {
+            newData[l][s][c] = newData[l][s][c].filter(i => i.id !== editingItem.id);
+          });
+        });
+      });
+    }
+
+    const item: Item = {
+      id: editingItem ? editingItem.id : Date.now().toString(),
       name: modalData.name,
       quantity: modalData.quantity,
-      dateAdded: new Date().toISOString(),
-      collector: modalData.collector || null,
+      dateAdded: editingItem ? editingItem.dateAdded : new Date().toISOString(),
+      collector: modalData.collector.trim() || null,
       location: finalLocation,
       spot: finalSpot
     };
-
-    Object.keys(newData).forEach(l => {
-      Object.keys(newData[l]).forEach(s => {
-        Object.keys(newData[l][s]).forEach(c => {
-          newData[l][s][c] = newData[l][s][c].filter(i => i.id !== (editingItem?.id || ''));
-        });
-      });
-    });
 
     const targetCol = item.collector || 'none';
     if (!newData[finalLocation]) newData[finalLocation] = {};
@@ -219,52 +220,43 @@ export default function Home() {
   const spots = currentLocation ? Object.keys(data[currentLocation] || {}) : [];
   const isSearching = searchQuery.length > 0;
   const globalResults = isSearching ? getGlobalSearchResults() : [];
-  const spotData = (currentLocation && data[currentLocation] && currentSpot !== undefined) ? data[currentLocation][currentSpot] || {} : {};
+  const spotData = (currentLocation && data[currentLocation]) ? data[currentLocation][currentSpot] || {} : {};
   const collectorKeys = Object.keys(spotData).sort((a,b) => a === 'none' ? -1 : a.localeCompare(b));
 
   return (
     <div className="min-h-screen bg-gray-900 py-8 px-4 text-gray-100 font-sans">
       <div className="max-w-6xl mx-auto">
-        
-        {/* GLOBAL SEARCH BAR */}
         <div className="mb-8 relative">
           <input 
             type="text" 
-            placeholder="🔍 Search all items, locations, spots, or collectors..." 
+            placeholder="🔍 Search all items..." 
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-gray-800 border-2 border-gray-700 rounded-xl px-6 py-4 text-lg shadow-2xl focus:border-blue-500 outline-none transition-all"
           />
-          {searchQuery && (
-            <button onClick={() => setSearchQuery('')} className="absolute right-6 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-xl">✕</button>
-          )}
+          {searchQuery && <button onClick={() => setSearchQuery('')} className="absolute right-6 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-xl">✕</button>}
         </div>
 
         <h1 className="text-4xl font-bold text-center mb-10 text-blue-400 tracking-tight">📦 Inventory Management 🏪</h1>
 
         {!isSearching && (
           <>
-            <div className="mb-2">
-              <nav className="flex p-2 rounded-t-lg overflow-x-auto scrollbar-hide">
-                {locations.map(loc => (
-                  <button key={loc} onClick={() => { setCurrentLocation(loc); const s = Object.keys(data[loc] || {}); setCurrentSpot(s.length > 0 ? s[0] : ''); }}
-                    className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm shadow-sm transition-all mr-1 border-b-0 ${currentLocation === loc ? 'bg-gray-600 text-white shadow-md z-10 scale-105' : 'bg-gray-700 text-gray-400 border-2 border-gray-600 hover:bg-gray-600 hover:text-gray-200'}`}>
-                    {loc}
-                  </button>
-                ))}
-              </nav>
-            </div>
-
-            <div className="mb-2">
-              <nav className="flex p-2 rounded-t-lg overflow-x-auto scrollbar-hide">
-                {spots.map(spot => (
-                  <button key={spot} onClick={() => setCurrentSpot(spot)}
-                    className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm shadow-sm transition-all mr-1 border-b-0 ${currentSpot === spot ? 'bg-gray-600 text-white shadow-md z-10 scale-105' : 'bg-gray-700 text-gray-400 border-2 border-gray-600 hover:bg-gray-600 hover:text-gray-200'}`}>
-                    {spot === '' ? 'null' : spot}
-                  </button>
-                ))}
-              </nav>
-            </div>
+            <nav className="flex p-2 rounded-t-lg overflow-x-auto scrollbar-hide mb-2">
+              {locations.map(loc => (
+                <button key={loc} onClick={() => { setCurrentLocation(loc); const s = Object.keys(data[loc] || {}); setCurrentSpot(s.length > 0 ? s[0] : ''); }}
+                  className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm transition-all mr-1 border-b-0 ${currentLocation === loc ? 'bg-gray-600 text-white shadow-md z-10 scale-105' : 'bg-gray-700 text-gray-400 border-2 border-gray-600 hover:bg-gray-600 hover:text-gray-200'}`}>
+                  {loc}
+                </button>
+              ))}
+            </nav>
+            <nav className="flex p-2 rounded-t-lg overflow-x-auto scrollbar-hide mb-2">
+              {spots.map(spot => (
+                <button key={spot} onClick={() => setCurrentSpot(spot)}
+                  className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm shadow-sm transition-all mr-1 border-b-0 ${currentSpot === spot ? 'bg-gray-600 text-white shadow-md z-10 scale-105' : 'bg-gray-700 text-gray-400 border-2 border-gray-600 hover:bg-gray-600 hover:text-gray-200'}`}>
+                  {spot === '' ? 'Loose Item' : spot}
+                </button>
+              ))}
+            </nav>
           </>
         )}
 
@@ -320,9 +312,7 @@ export default function Home() {
                             <tr key={item.id} className={`${selectedIds.has(item.id) ? 'bg-blue-900/20' : 'hover:bg-gray-750/50'} transition-all`}>
                               <td className="px-6 py-4"><input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleSelect(item.id)} className="h-5 w-5 rounded border-gray-600 bg-gray-900 text-blue-600 focus:ring-blue-500 cursor-pointer" /></td>
                               <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
-                              <td className="px-6 py-4 text-sm">
-                                  <span className="bg-gray-700 px-2 py-1 rounded border border-gray-600 font-mono text-xs">{item.quantity}</span>
-                              </td>
+                              <td className="px-6 py-4 text-sm"><span className="bg-gray-700 px-2 py-1 rounded border border-gray-600 font-mono text-xs">{item.quantity}</span></td>
                               <td className="px-6 py-4 text-sm text-gray-400 font-mono text-xs uppercase">{formatDate(item.dateAdded)}</td>
                               <td className="px-6 py-4">
                                 <div className="flex justify-center gap-2">
@@ -337,16 +327,11 @@ export default function Home() {
                     })
                   ) : (
                     globalResults.map(item => (
-                      <tr key={item.id} className={selectedIds.has(item.id) ? 'bg-blue-900/20' : 'hover:bg-gray-750/50'} transition-all>
+                      <tr key={item.id} className={`${selectedIds.has(item.id) ? 'bg-blue-900/20' : 'hover:bg-gray-750/50'} transition-all`}>
                         <td className="px-6 py-4"><input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleSelect(item.id)} className="h-5 w-5 rounded border-gray-600 bg-gray-900 text-blue-600 focus:ring-blue-500 cursor-pointer" /></td>
-                        <td className="px-6 py-4 text-sm font-bold">
-                          {item.name}
-                          <span className="text-[10px] text-blue-400/70 block mt-1 uppercase tracking-tighter">{item.collector ? `Inside: ${item.collector}` : 'Loose Item'}</span>
-                        </td>
+                        <td className="px-6 py-4 text-sm font-bold">{item.name}<span className="text-[10px] text-blue-400/70 block mt-1 uppercase tracking-tighter">{item.collector ? `Inside: ${item.collector}` : 'Loose Item'}</span></td>
                         <td className="px-6 py-4 text-sm font-mono">{item.quantity}</td>
-                        <td className="px-6 py-4 text-sm">
-                            <span className="text-blue-200 bg-blue-900/30 px-2 py-1 rounded text-[10px] font-bold uppercase border border-blue-800">{item.location} / {item.spot === '' ? 'null' : item.spot}</span>
-                        </td>
+                        <td className="px-6 py-4 text-sm"><span className="text-blue-200 bg-blue-900/30 px-2 py-1 rounded text-[10px] font-bold uppercase border border-blue-800">{item.location} / {item.spot === '' ? 'Loose' : item.spot}</span></td>
                         <td className="px-6 py-4 text-sm text-gray-400 font-mono text-xs uppercase">{formatDate(item.dateAdded)}</td>
                         <td className="px-6 py-4">
                             <div className="flex justify-center gap-2">
@@ -360,15 +345,14 @@ export default function Home() {
                 </tbody>
             </table>
           </div>
-          {(isSearching ? globalResults : getVisibleItemsForSelection()).length === 0 && (
-             <div className="text-center py-20 text-gray-500 italic bg-gray-900/20 border-t border-gray-700">No items matching your criteria found.</div>
-          )}
         </div>
 
         {/* Modal */}
         {showModal && (
-          <div className="fixed inset-0 bg-gray-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => setShowModal(false)}>
-            <div className="bg-gray-800 p-8 rounded-2xl w-full max-w-md shadow-2xl border border-gray-700 transform transition-all scale-100" onClick={(e) => e.stopPropagation()}>
+          <div className="fixed inset-0 bg-gray-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50" 
+               onClick={() => setShowModal(false)}>
+            <div className="bg-gray-800 p-8 rounded-2xl w-full max-w-md shadow-2xl border border-gray-700 transform transition-all scale-100" 
+                 onClick={(e) => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
                 <h2 className="text-2xl font-black text-gray-100 uppercase tracking-tight">{editingItem ? 'Edit Item' : 'New Item'}</h2>
                 <button onClick={() => setShowModal(false)} className="text-gray-500 hover:text-white">✕</button>
@@ -376,7 +360,7 @@ export default function Home() {
               <div className="space-y-5">
                 <div>
                     <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 block">Item Identity</label>
-                    <input type="text" placeholder="Name of item..." value={modalData.name} onChange={(e) => setModalData({ ...modalData, name: e.target.value })} className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                    <input type="text" placeholder="Name..." value={modalData.name} onChange={(e) => setModalData({ ...modalData, name: e.target.value })} className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -385,7 +369,7 @@ export default function Home() {
                     </div>
                     <div>
                         <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 block">Storage Container</label>
-                        <input type="text" placeholder="Box, Bag, etc..." value={modalData.collector} onChange={(e) => setModalData({ ...modalData, collector: e.target.value })} className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none" />
+                        <input type="text" placeholder="Box, Bag..." value={modalData.collector} onChange={(e) => setModalData({ ...modalData, collector: e.target.value })} className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none" />
                     </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -393,21 +377,18 @@ export default function Home() {
                         <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 block">Main Location</label>
                         <select 
                           value={modalData.location} 
-                          onChange={(e) => setModalData({ ...modalData, location: e.target.value, spot: e.target.value === 'NEW_LOC' ? 'NEW_SPOT' : modalData.spot })} 
+                          onChange={(e) => {
+                            const nextLoc = e.target.value;
+                            const nextSpots = data[nextLoc] ? Object.keys(data[nextLoc]) : [];
+                            const nextSpot = nextSpots.length > 0 ? nextSpots[0] : 'NEW_SPOT';
+                            setModalData({ ...modalData, location: nextLoc, spot: nextSpot });
+                          }} 
                           className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
                         >
                           {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
                           <option value="NEW_LOC">+ Add New Location</option>
                         </select>
-                        {modalData.location === 'NEW_LOC' && (
-                          <input 
-                            type="text" 
-                            placeholder="Type new location..." 
-                            value={modalData.customLocation} 
-                            onChange={(e) => setModalData({ ...modalData, customLocation: e.target.value })} 
-                            className="mt-2 w-full px-4 py-2 border border-blue-500 rounded-lg bg-gray-900 text-gray-100 outline-none"
-                          />
-                        )}
+                        {modalData.location === 'NEW_LOC' && <input type="text" placeholder="Type new loc..." value={modalData.customLocation} onChange={(e) => setModalData({ ...modalData, customLocation: e.target.value })} className="mt-2 w-full px-4 py-2 border border-blue-500 rounded-lg bg-gray-900 text-gray-100 outline-none" />}
                     </div>
                     <div>
                         <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 block">Specific Spot</label>
@@ -416,35 +397,26 @@ export default function Home() {
                           onChange={(e) => setModalData({ ...modalData, spot: e.target.value })} 
                           className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
                         >
-                          {modalData.location !== 'NEW_LOC' && Object.keys(data[modalData.location] || {}).map(spot => (
-                            <option key={spot} value={spot}>{spot === '' ? 'null' : spot}</option>
+                          {modalData.location && data[modalData.location] && Object.keys(data[modalData.location]).map(s => (
+                            <option key={s} value={s}>{s === '' ? 'Loose / No Spot' : s}</option>
                           ))}
                           <option value="NEW_SPOT">+ Add New Spot</option>
                         </select>
-                        {modalData.spot === 'NEW_SPOT' && (
-                          <input 
-                            type="text" 
-                            placeholder="Type new spot..." 
-                            value={modalData.customSpot} 
-                            onChange={(e) => setModalData({ ...modalData, customSpot: e.target.value })} 
-                            className="mt-2 w-full px-4 py-2 border border-blue-500 rounded-lg bg-gray-900 text-gray-100 outline-none"
-                          />
-                        )}
+                        {modalData.spot === 'NEW_SPOT' && <input type="text" placeholder="Type new spot..." value={modalData.customSpot} onChange={(e) => setModalData({ ...modalData, customSpot: e.target.value })} className="mt-2 w-full px-4 py-2 border border-blue-500 rounded-lg bg-gray-900 text-gray-100 outline-none" />}
                     </div>
                 </div>
               </div>
               <div className="flex justify-end mt-10 gap-3">
                 <button onClick={() => setShowModal(false)} className="px-6 py-3 text-gray-500 font-bold hover:text-white transition-colors">Discard</button>
-                <button onClick={saveItem} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black uppercase tracking-widest shadow-lg shadow-blue-900/20 transition-all active:scale-95">Commit</button>
+                <button onClick={saveItem} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black uppercase tracking-widest shadow-lg shadow-blue-900/20 active:scale-95 transition-all">Commit</button>
               </div>
             </div>
           </div>
         )}
 
-        {/* Toast */}
         {toastVisible && toastMessage && (
           <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 animate-bounce">
-            <div className="bg-blue-600 text-white px-8 py-3 rounded-2xl shadow-2xl font-black uppercase tracking-widest text-sm border-2 border-blue-400">
+            <div className="bg-blue-600 text-white px-8 py-3 rounded-2xl shadow-2xl font-black uppercase border-2 border-blue-400">
               {toastMessage}
             </div>
           </div>
