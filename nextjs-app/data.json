@@ -1,11 +1,38 @@
 {
   "Warehouse A": {
-    "Electronics": 50,
-    "Clothing": null
+    "Shelf 1": [
+      {
+        "id": "2",
+        "name": "Mouse",
+        "quantity": 10,
+        "dateAdded": "2023-01-02"
+      }
+    ],
+    "Shelf 2": [
+      {
+        "id": "3",
+        "name": "T-shirt",
+        "quantity": 20,
+        "dateAdded": "2023-01-03"
+      }
+    ]
   },
-  "Warehouse B": {
-    "Books": 20,
-    "Furniture": 15
-  },
-  "Store C": 100
+  "Store B": {
+    "Counter": [
+      {
+        "id": "4",
+        "name": "Book",
+        "quantity": 15,
+        "dateAdded": "2023-01-04"
+      },
+      {
+        "id": "1",
+        "name": "Laptop",
+        "quantity": 0,
+        "dateAdded": "2023-01-01",
+        "location": "Store B",
+        "spot": "Counter"
+      }
+    ]
+  }
 }

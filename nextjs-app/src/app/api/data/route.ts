@@ -1,24 +1,54 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs/promises';
-import path from 'path';
-
-const dataPath = path.join(process.cwd(), 'data.json');
+import { supabase } from '@/lib/supabase';
 
 export async function GET() {
   try {
-    const data = await fs.readFile(dataPath, 'utf-8');
-    return NextResponse.json(JSON.parse(data));
+    const { data, error } = await supabase
+      .from('inventory')
+      .select('*');
+
+    if (error) throw error;
+
+    // Group by location and spot
+    const grouped: { [location: string]: { [spot: string]: any[] } } = {};
+    data.forEach(row => {
+      if (!grouped[row.location]) grouped[row.location] = {};
+      grouped[row.location][row.spot] = row.items;
+    });
+
+    return NextResponse.json(grouped);
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to read data' }, { status: 500 });
+    console.error('Error fetching data:', error);
+    return NextResponse.json({ error: 'Failed to fetch data' }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const newData = await request.json();
-    await fs.writeFile(dataPath, JSON.stringify(newData, null, 2));
+
+    // Flatten the data for insertion
+    const rows = [];
+    for (const location in newData) {
+      for (const spot in newData[location]) {
+        rows.push({
+          location,
+          spot,
+          items: newData[location][spot]
+        });
+      }
+    }
+
+    // Upsert the rows
+    const { error } = await supabase
+      .from('inventory')
+      .upsert(rows, { onConflict: 'location,spot' });
+
+    if (error) throw error;
+
     return NextResponse.json({ success: true });
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to write data' }, { status: 500 });
+    console.error('Error saving data:', error);
+    return NextResponse.json({ error: 'Failed to save data' }, { status: 500 });
   }
 }

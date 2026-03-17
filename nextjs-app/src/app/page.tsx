@@ -2,40 +2,58 @@
 
 import { useState, useEffect } from 'react';
 
-type Data = { [location: string]: { [tab: string]: number | null } | number | null };
+type Item = { id: string; name: string; quantity: number; dateAdded: string };
+type Data = { [location: string]: { [spot: string]: Item[] } };
 
 export default function Home() {
   const [data, setData] = useState<Data>({});
   const [currentLocation, setCurrentLocation] = useState<string>('');
-  const [currentTab, setCurrentTab] = useState<string>('');
-  const [darkMode, setDarkMode] = useState(false);
+  const [currentSpot, setCurrentSpot] = useState<string>('');
+  const [sortBy, setSortBy] = useState<'name' | 'date'>('name');
+  const [showModal, setShowModal] = useState(false);
+  const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [modalData, setModalData] = useState({ name: '', quantity: 0, location: '', spot: '' });
 
   useEffect(() => {
-    fetch('/api/data')
-      .then(res => res.json())
-      .then(fetchedData => {
-        setData(fetchedData);
-        const locations = Object.keys(fetchedData);
-        if (locations.length > 0) {
-          setCurrentLocation(locations[0]);
-          const locData = fetchedData[locations[0]];
-          if (typeof locData === 'object' && locData !== null) {
-            const tabs = Object.keys(locData);
-            if (tabs.length > 0) {
-              setCurrentTab(tabs[0]);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showModal) {
+        setShowModal(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showModal]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const response = await fetch('/api/data');
+        if (response.ok) {
+          const fetchedData = await response.json();
+          setData(fetchedData);
+          const locs = Object.keys(fetchedData);
+          if (locs.length > 0) {
+            setCurrentLocation(locs[0]);
+            const spots = Object.keys(fetchedData[locs[0]] || {});
+            if (spots.length > 0) {
+              setCurrentSpot(spots[0]);
             }
           }
         }
-      });
+      } catch (error) {
+        console.error('Failed to fetch data:', error);
+      }
+    };
+
+    fetchData();
   }, []);
 
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [darkMode]);
+    document.documentElement.classList.add('dark');
+  }, []);
 
   const saveData = async (newData: Data) => {
     await fetch('/api/data', {
@@ -46,122 +64,197 @@ export default function Home() {
     setData(newData);
   };
 
-  const updateQuantity = (location: string, tab: string | null, quantity: number | null) => {
-    const newData = { ...data };
-    if (tab === null) {
-      newData[location] = quantity;
+  const locations = Object.keys(data);
+  const spots = currentLocation ? Object.keys(data[currentLocation] || {}) : [];
+  const items = currentSpot && data[currentLocation]?.[currentSpot] ? [...data[currentLocation][currentSpot]] : [];
+  items.sort((a, b) => {
+    if (sortBy === 'name') return a.name.localeCompare(b.name);
+    return new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
+  });
+
+  const openModal = (item: Item | null = null) => {
+    if (item) {
+      setEditingItem(item);
+      setModalData({ name: item.name, quantity: item.quantity, location: currentLocation, spot: currentSpot });
     } else {
-      if (typeof newData[location] !== 'object' || newData[location] === null) {
-        newData[location] = {};
+      setEditingItem(null);
+      setModalData({ name: '', quantity: 0, location: currentLocation, spot: currentSpot });
+    }
+    setShowModal(true);
+  };
+
+  const saveItem = () => {
+    const newData = { ...data };
+    const item: Item = editingItem ? { ...editingItem, ...modalData } : {
+      id: Date.now().toString(),
+      name: modalData.name,
+      quantity: modalData.quantity,
+      dateAdded: new Date().toISOString().split('T')[0]
+    };
+
+    // Remove from old location/spot if editing
+    if (editingItem) {
+      const oldLoc = data[currentLocation];
+      if (oldLoc && oldLoc[currentSpot]) {
+        oldLoc[currentSpot] = oldLoc[currentSpot].filter(i => i.id !== editingItem.id);
       }
-      (newData[location] as { [tab: string]: number | null })[tab] = quantity;
+    }
+
+    // Add to new location/spot
+    if (!newData[modalData.location]) newData[modalData.location] = {};
+    if (!newData[modalData.location][modalData.spot]) newData[modalData.location][modalData.spot] = [];
+    newData[modalData.location][modalData.spot].push(item);
+
+    saveData(newData);
+    setShowModal(false);
+  };
+
+  const deleteItem = (item: Item) => {
+    const newData = { ...data };
+    if (newData[currentLocation] && newData[currentLocation][currentSpot]) {
+      newData[currentLocation][currentSpot] = newData[currentLocation][currentSpot].filter(i => i.id !== item.id);
     }
     saveData(newData);
   };
 
-  const locations = Object.keys(data);
-  const locData = data[currentLocation];
-  const hasTabs = typeof locData === 'object' && locData !== null;
-  const tabs = hasTabs ? Object.keys(locData as { [tab: string]: number | null }) : [];
-  const currentQuantity = hasTabs
-    ? (locData as { [tab: string]: number | null })[currentTab] ?? null
-    : locData as number | null;
-
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-12 px-4 sm:px-6 lg:px-8 transition-colors duration-300">
-      <div className="max-w-4xl mx-auto bg-white dark:bg-gray-800 shadow-xl rounded-lg p-8 transition-colors duration-300">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Inventory Management</h1>
-          <button
-            onClick={() => setDarkMode(!darkMode)}
-            className="px-4 py-2 rounded-md bg-indigo-500 hover:bg-indigo-600 text-white transition-colors duration-200"
-          >
-            {darkMode ? 'Switch to Light' : 'Switch to Dark'}
-          </button>
-        </div>
+    <div className="min-h-screen bg-gray-900 py-8 px-4">
+      <div className="max-w-6xl mx-auto">
+        <h1 className="text-4xl font-bold text-center mb-10 text-blue-400">📦 Inventory Management 🏪</h1>
 
         {/* Location Tabs */}
         {locations.length > 0 && (
-          <div className="mb-8">
-            <div className="border-b border-gray-200 dark:border-gray-700">
-              <nav className="-mb-px flex space-x-8">
-                {locations.map(loc => (
-                  <button
-                    key={loc}
-                    onClick={() => {
-                      setCurrentLocation(loc);
-                      const newLocData = data[loc];
-                      if (typeof newLocData === 'object' && newLocData !== null) {
-                        const newTabs = Object.keys(newLocData);
-                        setCurrentTab(newTabs.length > 0 ? newTabs[0] : '');
-                      } else {
-                        setCurrentTab('');
-                      }
-                    }}
-                    className={`whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm transition-colors duration-200 ${
-                      currentLocation === loc
-                        ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                        : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
-                    }`}
-                  >
-                    {loc}
-                  </button>
+          <div className="mb-2">
+            <nav className="flex p-2 rounded-t-lg">
+              {locations.map(loc => (
+                <button
+                  key={loc}
+                  onClick={() => {
+                    setCurrentLocation(loc);
+                    const newSpots = Object.keys(data[loc] || {});
+                    setCurrentSpot(newSpots.length > 0 ? newSpots[0] : '');
+                  }}
+                  className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm shadow-sm transition-colors ${
+                    currentLocation === loc
+                      ? 'bg-gray-600 text-white shadow-md'
+                      : 'bg-gray-700 text-gray-300 border-2 border-gray-600 hover:bg-gray-600'
+                  }`}
+                >
+                  {loc}
+                </button>
+              ))}
+            </nav>
+          </div>
+        )}
+
+        {/* Spot Tabs */}
+        {spots.length > 0 && (
+          <div className="mb-2">
+            <nav className="flex p-2 rounded-t-lg">
+              {spots.map(spot => (
+                <button
+                  key={spot}
+                  onClick={() => setCurrentSpot(spot)}
+                  className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm shadow-sm transition-colors ${
+                    currentSpot === spot
+                      ? 'bg-gray-600 text-white shadow-md'
+                      : 'bg-gray-700 text-gray-300 border-2 border-gray-600 hover:bg-gray-600'
+                  }`}
+                >
+                  {spot}
+                </button>
+              ))}
+            </nav>
+          </div>
+        )}
+
+        {/* Sort and Add */}
+        {currentSpot && (
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <label className="mr-2 text-white">Sort by:</label>
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as 'name' | 'date')} className="border border-gray-600 rounded px-2 py-1 bg-gray-700 text-gray-100">
+                <option value="name">Name</option>
+                <option value="date">Date Added</option>
+              </select>
+            </div>
+            <button onClick={() => openModal()} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-full shadow-md transition-colors">➕ Add Item</button>
+          </div>
+        )}
+
+        {/* Items List */}
+        {items.length > 0 ? (
+          <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-700">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Name</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Quantity</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Date Added</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-600">
+                {items.map(item => (
+                  <tr key={item.id}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-100">{item.name}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-100">{item.quantity}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-100">{item.dateAdded}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <button onClick={() => openModal(item)} className="text-blue-400 hover:text-blue-300 mr-4">Modify</button>
+                      <button onClick={() => deleteItem(item)} className="text-red-400 hover:text-red-300">Delete</button>
+                    </td>
+                  </tr>
                 ))}
-              </nav>
-            </div>
+              </tbody>
+            </table>
           </div>
+        ) : currentSpot ? (
+          <p className="text-center py-8 text-gray-500">No items in this spot.</p>
+        ) : (
+          <p className="text-center py-8 text-gray-500">Select a location and spot to view items.</p>
         )}
 
-        {currentLocation && (
-          <div className="space-y-6">
-            {/* Sub Tabs if has tabs */}
-            {hasTabs && tabs.length > 0 && (
-              <div>
-                <div className="border-b border-gray-200 dark:border-gray-700">
-                  <nav className="-mb-px flex space-x-6">
-                    {tabs.map(tab => (
-                      <button
-                        key={tab}
-                        onClick={() => setCurrentTab(tab)}
-                        className={`whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm transition-colors duration-200 ${
-                          currentTab === tab
-                            ? 'border-green-500 text-green-600 dark:text-green-400'
-                            : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
-                        }`}
-                      >
-                        {tab}
-                      </button>
-                    ))}
-                  </nav>
-                </div>
+        {/* Modal */}
+        {showModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" onClick={(e) => { if (e.target === e.currentTarget) setShowModal(false); }}>
+            <div className="bg-gray-800 p-6 rounded-lg w-96" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-xl font-bold mb-4 text-gray-100">{editingItem ? 'Modify Item' : 'Add Item'}</h2>
+              <div className="space-y-4">
+                <input
+                  type="text"
+                  placeholder="Name"
+                  value={modalData.name}
+                  onChange={(e) => setModalData({ ...modalData, name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-700 text-gray-100"
+                />
+                <input
+                  type="number"
+                  placeholder="Quantity"
+                  value={modalData.quantity}
+                  onChange={(e) => setModalData({ ...modalData, quantity: Number(e.target.value) })}
+                  className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-700 text-gray-100"
+                />
+                <select
+                  value={modalData.location}
+                  onChange={(e) => setModalData({ ...modalData, location: e.target.value, spot: Object.keys(data[e.target.value] || {})[0] || '' })}
+                  className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-700 text-gray-100"
+                >
+                  {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                </select>
+                <select
+                  value={modalData.spot}
+                  onChange={(e) => setModalData({ ...modalData, spot: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-700 text-gray-100"
+                >
+                  {Object.keys(data[modalData.location] || {}).map(spot => <option key={spot} value={spot}>{spot}</option>)}
+                </select>
               </div>
-            )}
-
-            {/* Quantity Input */}
-            <div className="bg-gray-50 dark:bg-gray-700 p-6 rounded-lg transition-colors duration-300">
-              <label className="block text-lg font-medium text-gray-700 dark:text-gray-300 mb-4">
-                Quantity for {currentLocation}{hasTabs ? ` - ${currentTab}` : ''}
-              </label>
-              <input
-                type="number"
-                value={currentQuantity ?? ''}
-                onChange={(e) => {
-                  const val = e.target.value === '' ? null : Number(e.target.value);
-                  updateQuantity(currentLocation, hasTabs ? currentTab : null, val);
-                }}
-                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-indigo-500 dark:focus:border-indigo-400 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-lg transition-colors duration-200"
-                placeholder="Enter quantity (leave empty for null)"
-              />
-              <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-                Current quantity: {currentQuantity !== null ? currentQuantity : 'Not set'}
-              </p>
+              <div className="flex justify-end mt-6">
+                <button onClick={() => setShowModal(false)} className="mr-4 px-4 py-2 text-gray-400">Cancel</button>
+                <button onClick={saveItem} className="px-4 py-2 bg-green-600 text-white rounded">Save</button>
+              </div>
             </div>
-          </div>
-        )}
-
-        {locations.length === 0 && (
-          <div className="text-center py-12">
-            <p className="text-gray-500 dark:text-gray-400 text-lg">No locations available. Add some data to data.json</p>
           </div>
         )}
       </div>
