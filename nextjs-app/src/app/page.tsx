@@ -1,53 +1,63 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 
-type Item = { id: string; name: string; quantity: number; dateAdded: string };
-type Data = { [location: string]: { [spot: string]: Item[] } };
+type Item = { id: string; name: string; quantity: number; dateAdded: string; collector?: string | null; location: string; spot: string };
+type Data = { [location: string]: { [spot: string]: { [collector: string]: Item[] } } };
 
 export default function Home() {
   const [data, setData] = useState<Data>({});
   const [currentLocation, setCurrentLocation] = useState<string>('');
   const [currentSpot, setCurrentSpot] = useState<string>('');
   const [sortBy, setSortBy] = useState<'name' | 'date'>('name');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
-  const [modalData, setModalData] = useState({ name: '', quantity: 0, location: '', spot: '' });
+  const [modalData, setModalData] = useState({ name: '', quantity: 1, location: '', spot: '', collector: '', customLocation: '', customSpot: '' });
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastVisible, setToastVisible] = useState(false);
+  const [expandedCollectors, setExpandedCollectors] = useState<Set<string>>(new Set());
 
+  // Handle ESC key to close modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && showModal) {
-        setShowModal(false);
-      }
+      if (e.key === 'Escape') setShowModal(false);
     };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
+    if (showModal) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showModal]);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const response = await fetch('/api/data');
-        if (response.ok) {
-          const fetchedData = await response.json();
-          setData(fetchedData);
-          const locs = Object.keys(fetchedData);
-          if (locs.length > 0) {
-            setCurrentLocation(locs[0]);
-            const spots = Object.keys(fetchedData[locs[0]] || {});
-            if (spots.length > 0) {
-              setCurrentSpot(spots[0]);
-            }
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setToastVisible(true);
+    window.setTimeout(() => setToastVisible(false), 3000);
+  };
+
+  const fetchData = async () => {
+    try {
+      const response = await fetch('/api/data');
+      if (response.ok) {
+        const fetchedData = await response.json();
+        setData(fetchedData);
+        const locs = Object.keys(fetchedData);
+        if (locs.length > 0) {
+          const firstLoc = locs[0];
+          setCurrentLocation(firstLoc);
+          const spots = Object.keys(fetchedData[firstLoc] || {});
+          if (spots.length > 0) {
+            setCurrentSpot(spots[0]);
           }
         }
-      } catch (error) {
-        console.error('Failed to fetch data:', error);
       }
-    };
+    } catch (error) {
+      console.error('Failed to fetch:', error);
+    }
+  };
 
+  useEffect(() => {
     fetchData();
   }, []);
 
@@ -64,196 +74,378 @@ export default function Home() {
     setData(newData);
   };
 
-  const locations = Object.keys(data);
-  const spots = currentLocation ? Object.keys(data[currentLocation] || {}) : [];
-  const items = currentSpot && data[currentLocation]?.[currentSpot] ? [...data[currentLocation][currentSpot]] : [];
-  items.sort((a, b) => {
-    if (sortBy === 'name') return a.name.localeCompare(b.name);
-    return new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
-  });
+  const getVisibleItemsForSelection = () => {
+    if (searchQuery) return getGlobalSearchResults();
+    const currentItems = data[currentLocation]?.[currentSpot] || {};
+    return Object.values(currentItems).flat();
+  };
+
+  const getGlobalSearchResults = () => {
+    const results: Item[] = [];
+    Object.keys(data).forEach(loc => {
+      Object.keys(data[loc]).forEach(spot => {
+        Object.keys(data[loc][spot]).forEach(col => {
+          data[loc][spot][col].forEach(item => {
+            const match = 
+              item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              (item.collector && item.collector.toLowerCase().includes(searchQuery.toLowerCase())) ||
+              loc.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              spot.toLowerCase().includes(searchQuery.toLowerCase());
+            if (match) results.push({ ...item, location: loc, spot: spot });
+          });
+        });
+      });
+    });
+    return results;
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const items = getVisibleItemsForSelection();
+    if (selectedIds.size === items.length && items.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(items.map(i => i.id)));
+    }
+  };
+
+  const toggleCollector = (collectorName: string) => {
+    setExpandedCollectors(prev => {
+      const next = new Set(prev);
+      if (next.has(collectorName)) next.delete(collectorName);
+      else next.add(collectorName);
+      return next;
+    });
+  };
 
   const openModal = (item: Item | null = null) => {
     if (item) {
       setEditingItem(item);
-      setModalData({ name: item.name, quantity: item.quantity, location: currentLocation, spot: currentSpot });
+      setModalData({ 
+        name: item.name, quantity: item.quantity, location: item.location, spot: item.spot, 
+        collector: item.collector || '', customLocation: '', customSpot: ''
+      });
     } else {
       setEditingItem(null);
-      setModalData({ name: '', quantity: 0, location: currentLocation, spot: currentSpot });
+      setModalData({ 
+        name: '', quantity: 1, location: currentLocation, spot: currentSpot, 
+        collector: '', customLocation: '', customSpot: ''
+      });
     }
     setShowModal(true);
   };
 
   const saveItem = () => {
     const newData = { ...data };
-    const item: Item = editingItem ? { ...editingItem, ...modalData } : {
+    const finalLocation = modalData.location === 'NEW_LOC' ? modalData.customLocation : modalData.location;
+    const finalSpot = modalData.spot === 'NEW_SPOT' ? modalData.customSpot : modalData.spot;
+
+    if (!finalLocation || !finalSpot) {
+      showToast("Location and Spot cannot be empty");
+      return;
+    }
+
+    const item: Item = editingItem ? { ...editingItem, ...modalData, location: finalLocation, spot: finalSpot } : {
       id: Date.now().toString(),
       name: modalData.name,
       quantity: modalData.quantity,
-      dateAdded: new Date().toISOString().split('T')[0]
+      dateAdded: new Date().toISOString(),
+      collector: modalData.collector || null,
+      location: finalLocation,
+      spot: finalSpot
     };
 
-    // Remove from old location/spot if editing
-    if (editingItem) {
-      const oldLoc = data[currentLocation];
-      if (oldLoc && oldLoc[currentSpot]) {
-        oldLoc[currentSpot] = oldLoc[currentSpot].filter(i => i.id !== editingItem.id);
-      }
-    }
+    Object.keys(newData).forEach(l => {
+      Object.keys(newData[l]).forEach(s => {
+        Object.keys(newData[l][s]).forEach(c => {
+          newData[l][s][c] = newData[l][s][c].filter(i => i.id !== (editingItem?.id || ''));
+        });
+      });
+    });
 
-    // Add to new location/spot
-    if (!newData[modalData.location]) newData[modalData.location] = {};
-    if (!newData[modalData.location][modalData.spot]) newData[modalData.location][modalData.spot] = [];
-    newData[modalData.location][modalData.spot].push(item);
+    const targetCol = item.collector || 'none';
+    if (!newData[finalLocation]) newData[finalLocation] = {};
+    if (!newData[finalLocation][finalSpot]) newData[finalLocation][finalSpot] = {};
+    if (!newData[finalLocation][finalSpot][targetCol]) newData[finalLocation][finalSpot][targetCol] = [];
+    newData[finalLocation][finalSpot][targetCol].push(item);
 
     saveData(newData);
     setShowModal(false);
+    showToast(editingItem ? 'Item updated' : 'Item added');
   };
 
   const deleteItem = (item: Item) => {
     const newData = { ...data };
-    if (newData[currentLocation] && newData[currentLocation][currentSpot]) {
-      newData[currentLocation][currentSpot] = newData[currentLocation][currentSpot].filter(i => i.id !== item.id);
-    }
+    Object.keys(newData).forEach(l => {
+      Object.keys(newData[l]).forEach(s => {
+        Object.keys(newData[l][s]).forEach(c => {
+          newData[l][s][c] = newData[l][s][c].filter(i => i.id !== item.id);
+        });
+      });
+    });
     saveData(newData);
+    showToast('Item removed');
   };
 
+  const deleteSelected = () => {
+    if (selectedIds.size === 0) return;
+    const newData = { ...data };
+    Object.keys(newData).forEach(l => {
+      Object.keys(newData[l]).forEach(s => {
+        Object.keys(newData[l][s]).forEach(c => {
+          newData[l][s][c] = newData[l][s][c].filter(i => !selectedIds.has(i.id));
+        });
+      });
+    });
+    saveData(newData);
+    setSelectedIds(new Set());
+    showToast(`${selectedIds.size} items removed`);
+  };
+
+  const formatDate = (dateString: string) => {
+    if (!dateString) return '';
+    return dateString.split('T')[0];
+  };
+
+  const locations = Object.keys(data);
+  const spots = currentLocation ? Object.keys(data[currentLocation] || {}) : [];
+  const isSearching = searchQuery.length > 0;
+  const globalResults = isSearching ? getGlobalSearchResults() : [];
+  const spotData = (currentLocation && data[currentLocation] && currentSpot !== undefined) ? data[currentLocation][currentSpot] || {} : {};
+  const collectorKeys = Object.keys(spotData).sort((a,b) => a === 'none' ? -1 : a.localeCompare(b));
+
   return (
-    <div className="min-h-screen bg-gray-900 py-8 px-4">
+    <div className="min-h-screen bg-gray-900 py-8 px-4 text-gray-100 font-sans">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-4xl font-bold text-center mb-10 text-blue-400">📦 Inventory Management 🏪</h1>
+        
+        {/* GLOBAL SEARCH BAR */}
+        <div className="mb-8 relative">
+          <input 
+            type="text" 
+            placeholder="🔍 Search all items, locations, spots, or collectors..." 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-gray-800 border-2 border-gray-700 rounded-xl px-6 py-4 text-lg shadow-2xl focus:border-blue-500 outline-none transition-all"
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} className="absolute right-6 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-xl">✕</button>
+          )}
+        </div>
 
-        {/* Location Tabs */}
-        {locations.length > 0 && (
-          <div className="mb-2">
-            <nav className="flex p-2 rounded-t-lg">
-              {locations.map(loc => (
-                <button
-                  key={loc}
-                  onClick={() => {
-                    setCurrentLocation(loc);
-                    const newSpots = Object.keys(data[loc] || {});
-                    setCurrentSpot(newSpots.length > 0 ? newSpots[0] : '');
-                  }}
-                  className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm shadow-sm transition-colors ${
-                    currentLocation === loc
-                      ? 'bg-gray-600 text-white shadow-md'
-                      : 'bg-gray-700 text-gray-300 border-2 border-gray-600 hover:bg-gray-600'
-                  }`}
-                >
-                  {loc}
-                </button>
-              ))}
-            </nav>
-          </div>
-        )}
+        <h1 className="text-4xl font-bold text-center mb-10 text-blue-400 tracking-tight">📦 Inventory Management 🏪</h1>
 
-        {/* Spot Tabs */}
-        {spots.length > 0 && (
-          <div className="mb-2">
-            <nav className="flex p-2 rounded-t-lg">
-              {spots.map(spot => (
-                <button
-                  key={spot}
-                  onClick={() => setCurrentSpot(spot)}
-                  className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm shadow-sm transition-colors ${
-                    currentSpot === spot
-                      ? 'bg-gray-600 text-white shadow-md'
-                      : 'bg-gray-700 text-gray-300 border-2 border-gray-600 hover:bg-gray-600'
-                  }`}
-                >
-                  {spot}
-                </button>
-              ))}
-            </nav>
-          </div>
-        )}
-
-        {/* Sort and Add */}
-        {currentSpot && (
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <label className="mr-2 text-white">Sort by:</label>
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as 'name' | 'date')} className="border border-gray-600 rounded px-2 py-1 bg-gray-700 text-gray-100">
-                <option value="name">Name</option>
-                <option value="date">Date Added</option>
-              </select>
-            </div>
-            <button onClick={() => openModal()} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-full shadow-md transition-colors">➕ Add Item</button>
-          </div>
-        )}
-
-        {/* Items List */}
-        {items.length > 0 ? (
-          <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-gray-700">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Name</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Quantity</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Date Added</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-600">
-                {items.map(item => (
-                  <tr key={item.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-100">{item.name}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-100">{item.quantity}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-100">{item.dateAdded}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <button onClick={() => openModal(item)} className="text-blue-400 hover:text-blue-300 mr-4">Modify</button>
-                      <button onClick={() => deleteItem(item)} className="text-red-400 hover:text-red-300">Delete</button>
-                    </td>
-                  </tr>
+        {!isSearching && (
+          <>
+            <div className="mb-2">
+              <nav className="flex p-2 rounded-t-lg overflow-x-auto scrollbar-hide">
+                {locations.map(loc => (
+                  <button key={loc} onClick={() => { setCurrentLocation(loc); const s = Object.keys(data[loc] || {}); setCurrentSpot(s.length > 0 ? s[0] : ''); }}
+                    className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm shadow-sm transition-all mr-1 border-b-0 ${currentLocation === loc ? 'bg-gray-600 text-white shadow-md z-10 scale-105' : 'bg-gray-700 text-gray-400 border-2 border-gray-600 hover:bg-gray-600 hover:text-gray-200'}`}>
+                    {loc}
+                  </button>
                 ))}
-              </tbody>
+              </nav>
+            </div>
+
+            <div className="mb-2">
+              <nav className="flex p-2 rounded-t-lg overflow-x-auto scrollbar-hide">
+                {spots.map(spot => (
+                  <button key={spot} onClick={() => setCurrentSpot(spot)}
+                    className={`whitespace-nowrap py-2 px-4 rounded-t-lg font-semibold text-sm shadow-sm transition-all mr-1 border-b-0 ${currentSpot === spot ? 'bg-gray-600 text-white shadow-md z-10 scale-105' : 'bg-gray-700 text-gray-400 border-2 border-gray-600 hover:bg-gray-600 hover:text-gray-200'}`}>
+                    {spot === '' ? 'null' : spot}
+                  </button>
+                ))}
+              </nav>
+            </div>
+          </>
+        )}
+
+        <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4 bg-gray-800/50 p-4 rounded-xl border border-gray-700 shadow-inner">
+          <div className="flex flex-wrap justify-center gap-3">
+            <div className="flex items-center gap-2 bg-gray-700 px-3 py-1 rounded-lg border border-gray-600">
+                <span className="text-xs text-gray-400 uppercase font-bold">Sort</span>
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as 'name' | 'date')} className="bg-transparent text-sm focus:outline-none cursor-pointer">
+                  <option value="name">Name</option>
+                  <option value="date">Date</option>
+                </select>
+            </div>
+            <button onClick={toggleSelectAll} className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-sm rounded-lg border border-gray-600 transition-all font-medium">Select All</button>
+            <button onClick={deleteSelected} disabled={selectedIds.size === 0} className="px-4 py-1.5 bg-red-900/40 hover:bg-red-800 text-red-200 text-sm rounded-lg border border-red-700 transition-all font-medium disabled:opacity-20 disabled:cursor-not-allowed">Delete Selected ({selectedIds.size})</button>
+          </div>
+          <button onClick={() => openModal()} className="w-full md:w-auto bg-blue-600 hover:bg-blue-500 text-white px-8 py-2.5 rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-all active:scale-95 flex items-center justify-center gap-2">➕ Add Item</button>
+        </div>
+
+        <div className="bg-gray-800 rounded-2xl shadow-2xl overflow-hidden border border-gray-700">
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+                <thead className="bg-gray-700/50 border-b border-gray-700">
+                  <tr>
+                    <th className="px-6 py-4 text-left w-12">
+                       <input type="checkbox" checked={getVisibleItemsForSelection().length > 0 && selectedIds.size === getVisibleItemsForSelection().length} onChange={toggleSelectAll} className="h-5 w-5 rounded border-gray-600 bg-gray-900 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-black text-gray-400 uppercase tracking-widest">Name</th>
+                    <th className="px-6 py-4 text-left text-xs font-black text-gray-400 uppercase tracking-widest w-24">Qty</th>
+                    {isSearching && <th className="px-6 py-4 text-left text-xs font-black text-gray-400 uppercase tracking-widest">Location / Spot</th>}
+                    <th className="px-6 py-4 text-left text-xs font-black text-gray-400 uppercase tracking-widest w-40">Date Added</th>
+                    <th className="px-6 py-4 text-center text-xs font-black text-gray-400 uppercase tracking-widest w-48">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-700/50">
+                  {!isSearching ? (
+                    collectorKeys.map(colKey => {
+                      const items = [...(spotData[colKey] || [])].sort((a, b) => sortBy === 'name' ? a.name.localeCompare(b.name) : new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime());
+                      const isExpanded = expandedCollectors.has(colKey) || colKey === 'none';
+                      return (
+                        <React.Fragment key={colKey}>
+                          {colKey !== 'none' && (
+                            <tr className="bg-gray-900/30 cursor-pointer hover:bg-gray-900/50 transition-colors" onClick={() => toggleCollector(colKey)}>
+                              <td colSpan={5} className="px-6 py-3 font-bold text-blue-300 text-sm">
+                                <div className="flex items-center gap-2">
+                                    <span className={`transition-transform duration-200 ${isExpanded ? 'rotate-0' : '-rotate-90'}`}>▼</span>
+                                    <span className="opacity-50 font-medium">Collector:</span> {colKey} 
+                                    <span className="bg-blue-900/50 text-blue-200 px-2 py-0.5 rounded-full text-xs ml-2 border border-blue-700">{items.length} items</span>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                          {isExpanded && items.map(item => (
+                            <tr key={item.id} className={`${selectedIds.has(item.id) ? 'bg-blue-900/20' : 'hover:bg-gray-750/50'} transition-all`}>
+                              <td className="px-6 py-4"><input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleSelect(item.id)} className="h-5 w-5 rounded border-gray-600 bg-gray-900 text-blue-600 focus:ring-blue-500 cursor-pointer" /></td>
+                              <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
+                              <td className="px-6 py-4 text-sm">
+                                  <span className="bg-gray-700 px-2 py-1 rounded border border-gray-600 font-mono text-xs">{item.quantity}</span>
+                              </td>
+                              <td className="px-6 py-4 text-sm text-gray-400 font-mono text-xs uppercase">{formatDate(item.dateAdded)}</td>
+                              <td className="px-6 py-4">
+                                <div className="flex justify-center gap-2">
+                                  <button onClick={() => openModal(item)} className="px-3 py-1 bg-blue-900/40 hover:bg-blue-800 text-blue-200 text-xs rounded-lg border border-blue-700 transition-all font-bold uppercase tracking-wider">Edit</button>
+                                  <button onClick={() => deleteItem(item)} className="px-3 py-1 bg-gray-700 hover:bg-red-900/60 text-gray-300 hover:text-red-200 text-xs rounded-lg border border-gray-600 hover:border-red-700 transition-all font-bold uppercase tracking-wider">Delete</button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      );
+                    })
+                  ) : (
+                    globalResults.map(item => (
+                      <tr key={item.id} className={selectedIds.has(item.id) ? 'bg-blue-900/20' : 'hover:bg-gray-750/50'} transition-all>
+                        <td className="px-6 py-4"><input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleSelect(item.id)} className="h-5 w-5 rounded border-gray-600 bg-gray-900 text-blue-600 focus:ring-blue-500 cursor-pointer" /></td>
+                        <td className="px-6 py-4 text-sm font-bold">
+                          {item.name}
+                          <span className="text-[10px] text-blue-400/70 block mt-1 uppercase tracking-tighter">{item.collector ? `Inside: ${item.collector}` : 'Loose Item'}</span>
+                        </td>
+                        <td className="px-6 py-4 text-sm font-mono">{item.quantity}</td>
+                        <td className="px-6 py-4 text-sm">
+                            <span className="text-blue-200 bg-blue-900/30 px-2 py-1 rounded text-[10px] font-bold uppercase border border-blue-800">{item.location} / {item.spot === '' ? 'null' : item.spot}</span>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-400 font-mono text-xs uppercase">{formatDate(item.dateAdded)}</td>
+                        <td className="px-6 py-4">
+                            <div className="flex justify-center gap-2">
+                                <button onClick={() => openModal(item)} className="px-3 py-1 bg-blue-900/40 hover:bg-blue-800 text-blue-200 text-xs rounded-lg border border-blue-700 transition-all font-bold uppercase tracking-wider">Edit</button>
+                                <button onClick={() => deleteItem(item)} className="px-3 py-1 bg-gray-700 hover:bg-red-900/60 text-gray-300 hover:text-red-200 text-xs rounded-lg border border-gray-600 hover:border-red-700 transition-all font-bold uppercase tracking-wider">Delete</button>
+                            </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
             </table>
           </div>
-        ) : currentSpot ? (
-          <p className="text-center py-8 text-gray-500">No items in this spot.</p>
-        ) : (
-          <p className="text-center py-8 text-gray-500">Select a location and spot to view items.</p>
-        )}
+          {(isSearching ? globalResults : getVisibleItemsForSelection()).length === 0 && (
+             <div className="text-center py-20 text-gray-500 italic bg-gray-900/20 border-t border-gray-700">No items matching your criteria found.</div>
+          )}
+        </div>
 
         {/* Modal */}
         {showModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" onClick={(e) => { if (e.target === e.currentTarget) setShowModal(false); }}>
-            <div className="bg-gray-800 p-6 rounded-lg w-96" onClick={(e) => e.stopPropagation()}>
-              <h2 className="text-xl font-bold mb-4 text-gray-100">{editingItem ? 'Modify Item' : 'Add Item'}</h2>
-              <div className="space-y-4">
-                <input
-                  type="text"
-                  placeholder="Name"
-                  value={modalData.name}
-                  onChange={(e) => setModalData({ ...modalData, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-700 text-gray-100"
-                />
-                <input
-                  type="number"
-                  placeholder="Quantity"
-                  value={modalData.quantity}
-                  onChange={(e) => setModalData({ ...modalData, quantity: Number(e.target.value) })}
-                  className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-700 text-gray-100"
-                />
-                <select
-                  value={modalData.location}
-                  onChange={(e) => setModalData({ ...modalData, location: e.target.value, spot: Object.keys(data[e.target.value] || {})[0] || '' })}
-                  className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-700 text-gray-100"
-                >
-                  {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
-                </select>
-                <select
-                  value={modalData.spot}
-                  onChange={(e) => setModalData({ ...modalData, spot: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-700 text-gray-100"
-                >
-                  {Object.keys(data[modalData.location] || {}).map(spot => <option key={spot} value={spot}>{spot}</option>)}
-                </select>
+          <div className="fixed inset-0 bg-gray-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => setShowModal(false)}>
+            <div className="bg-gray-800 p-8 rounded-2xl w-full max-w-md shadow-2xl border border-gray-700 transform transition-all scale-100" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                <h2 className="text-2xl font-black text-gray-100 uppercase tracking-tight">{editingItem ? 'Edit Item' : 'New Item'}</h2>
+                <button onClick={() => setShowModal(false)} className="text-gray-500 hover:text-white">✕</button>
               </div>
-              <div className="flex justify-end mt-6">
-                <button onClick={() => setShowModal(false)} className="mr-4 px-4 py-2 text-gray-400">Cancel</button>
-                <button onClick={saveItem} className="px-4 py-2 bg-green-600 text-white rounded">Save</button>
+              <div className="space-y-5">
+                <div>
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 block">Item Identity</label>
+                    <input type="text" placeholder="Name of item..." value={modalData.name} onChange={(e) => setModalData({ ...modalData, name: e.target.value })} className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 block">Amount</label>
+                        <input type="number" value={modalData.quantity} onChange={(e) => setModalData({ ...modalData, quantity: Number(e.target.value) })} className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 block">Storage Container</label>
+                        <input type="text" placeholder="Box, Bag, etc..." value={modalData.collector} onChange={(e) => setModalData({ ...modalData, collector: e.target.value })} className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 block">Main Location</label>
+                        <select 
+                          value={modalData.location} 
+                          onChange={(e) => setModalData({ ...modalData, location: e.target.value, spot: e.target.value === 'NEW_LOC' ? 'NEW_SPOT' : modalData.spot })} 
+                          className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
+                        >
+                          {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                          <option value="NEW_LOC">+ Add New Location</option>
+                        </select>
+                        {modalData.location === 'NEW_LOC' && (
+                          <input 
+                            type="text" 
+                            placeholder="Type new location..." 
+                            value={modalData.customLocation} 
+                            onChange={(e) => setModalData({ ...modalData, customLocation: e.target.value })} 
+                            className="mt-2 w-full px-4 py-2 border border-blue-500 rounded-lg bg-gray-900 text-gray-100 outline-none"
+                          />
+                        )}
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 block">Specific Spot</label>
+                        <select 
+                          value={modalData.spot} 
+                          onChange={(e) => setModalData({ ...modalData, spot: e.target.value })} 
+                          className="w-full px-4 py-3 border border-gray-600 rounded-xl bg-gray-900/50 text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
+                        >
+                          {modalData.location !== 'NEW_LOC' && Object.keys(data[modalData.location] || {}).map(spot => (
+                            <option key={spot} value={spot}>{spot === '' ? 'null' : spot}</option>
+                          ))}
+                          <option value="NEW_SPOT">+ Add New Spot</option>
+                        </select>
+                        {modalData.spot === 'NEW_SPOT' && (
+                          <input 
+                            type="text" 
+                            placeholder="Type new spot..." 
+                            value={modalData.customSpot} 
+                            onChange={(e) => setModalData({ ...modalData, customSpot: e.target.value })} 
+                            className="mt-2 w-full px-4 py-2 border border-blue-500 rounded-lg bg-gray-900 text-gray-100 outline-none"
+                          />
+                        )}
+                    </div>
+                </div>
               </div>
+              <div className="flex justify-end mt-10 gap-3">
+                <button onClick={() => setShowModal(false)} className="px-6 py-3 text-gray-500 font-bold hover:text-white transition-colors">Discard</button>
+                <button onClick={saveItem} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black uppercase tracking-widest shadow-lg shadow-blue-900/20 transition-all active:scale-95">Commit</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Toast */}
+        {toastVisible && toastMessage && (
+          <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 animate-bounce">
+            <div className="bg-blue-600 text-white px-8 py-3 rounded-2xl shadow-2xl font-black uppercase tracking-widest text-sm border-2 border-blue-400">
+              {toastMessage}
             </div>
           </div>
         )}
