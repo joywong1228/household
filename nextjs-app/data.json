@@ -1,0 +1,11 @@
+{
+  "Warehouse A": {
+    "Electronics": 50,
+    "Clothing": null
+  },
+  "Warehouse B": {
+    "Books": 20,
+    "Furniture": 15
+  },
+  "Store C": 100
+}
